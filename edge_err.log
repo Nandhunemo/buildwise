@@ -1,0 +1,7 @@
+[7628:20956:0911/231959.036:WARNING:chrome\browser\extensions\activity_log\activity_log_policy.cc:71] Scheduling init
+[7628:20956:0911/231959.036:WARNING:chrome\browser\extensions\activity_log\activity_log_policy.cc:71] Scheduling init
+[7628:20956:0911/231959.259:WARNING:chrome\browser\extensions\external_registry_loader_win.cc:283] Error observing HKLM: 5
+[7628:20956:0911/231959.777:INFO:CONSOLE:5518] "[ProtocolLaunch] handler constructed; wiring port events.", source: chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.js (5518)
+[7628:20956:0911/231959.794:INFO:CONSOLE:606] "Uncaught SyntaxError: Missing } in template expression", source: http://127.0.0.1:8000/ (606)
+[7628:20956:0911/232000.232:WARNING:components\signin\internal\identity_manager\account_fetcher_service.cc:250] Edge does not support fetching account capabilities
+[7628:20956:0911/232000.232:WARNING:components\signin\internal\identity_manager\account_fetcher_service.cc:211] Should not execute: Tests depending on this function may fail

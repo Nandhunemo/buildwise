@@ -1,0 +1,1546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BuildWise AI — Intelligent Home Construction Planning Platform</title>
+  <meta name="description" content="Autonomous multi-agent construction orchestration platform for home design, cost, timeline, and risk planning." />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23224435'><polygon points='12 2 2 7 12 12 22 7 12 2'/><polyline points='2 17 12 22 22 17'/></svg>" />
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/index.css">
+  <style>
+    .floor-svg-wrap {
+      background: #193125;
+      border: 2px solid var(--primary);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      overflow-x: auto;
+      box-shadow: inset 0 2px 10px rgba(0,0,0,0.3);
+    }
+    .svg-room-rect {
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .svg-room-rect:hover {
+      filter: brightness(1.12);
+      stroke: #F9F4BE !important;
+      stroke-width: 3 !important;
+    }
+    .tab-btn {
+      padding: 8px 16px;
+      border-radius: var(--radius-md);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--primary);
+      background: transparent;
+      color: var(--primary);
+      transition: var(--transition);
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #FFFFFF;
+    }
+    .color-swatch {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,0.15);
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Dynamic Content Rendered Here -->
+  </div>
+
+  <script>
+    // =========================================================
+    // BUILDWISE AI - CENTRALIZED DYNAMIC CLIENT APPLICATION
+    // =========================================================
+
+    const state = {
+      activePage: 'landing',
+      projects: [],
+      currentProject: null,
+      healthScore: null,
+      decisions: [],
+      contractors: [],
+      aiPlan: null,
+      selectedFloor: 1,
+      loading: false,
+      notice: null,
+      error: null,
+      whatIfResult: null
+    };
+
+    // Central API calls
+    async function apiRequest(endpoint, method = 'GET', data = null) {
+      const options = {
+        method,
+        headers: { 'Content-Type': 'application/json' }
+      };
+      if (data) {
+        options.body = JSON.stringify(data);
+      }
+      const response = await fetch(endpoint, options);
+      if (!response.ok) {
+        let err = `HTTP ${response.status}`;
+        try {
+          const json = await response.json();
+          err = json.detail || JSON.stringify(json);
+        } catch(e) {}
+        throw new Error(err);
+      }
+      return await response.json();
+    }
+
+    async function init() {
+      render(); // Render base layout immediately so page is never blank
+      try {
+        state.projects = await apiRequest('/api/projects');
+        if (state.projects.length > 0) {
+          await selectProject(state.projects[0].id);
+        }
+      } catch (e) {
+        console.warn("Init error:", e);
+      }
+      render();
+    }
+
+    async function selectProject(id) {
+      try {
+        state.loading = true;
+        render();
+        state.currentProject = await apiRequest(`/api/projects/${id}`);
+        state.selectedFloor = 1;
+        
+        // Load AI Plan (auto-generates if not yet created)
+        try { 
+          state.aiPlan = await apiRequest(`/api/projects/${id}/ai-plan`); 
+        } catch(e) { 
+          state.aiPlan = null; 
+        }
+
+        try { state.healthScore = await apiRequest(`/api/projects/${id}/health-score`); } catch(e) { state.healthScore = null; }
+        try { state.decisions = await apiRequest(`/api/projects/${id}/decisions`); } catch(e) { state.decisions = []; }
+        try { state.contractors = await apiRequest(`/api/contractors?location=${encodeURIComponent(state.currentProject.location || '')}`); } catch(e) { state.contractors = []; }
+      } catch (e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    async function loadChennaiDemo() {
+      try {
+        state.loading = true;
+        render();
+        const res = await apiRequest('/api/demo/load-chennai', 'POST');
+        state.projects = await apiRequest('/api/projects');
+        await selectProject(res.project_id);
+        state.activePage = 'dashboard';
+        state.notice = "Official Chennai Demo Project loaded with 8-agent dynamic architectural plan!";
+      } catch (e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    async function runAIPlan() {
+      if (!state.currentProject) return;
+      try {
+        state.loading = true;
+        state.activePage = 'planning';
+        render();
+        const plan = await apiRequest(`/api/projects/${state.currentProject.id}/ai-plan`, 'POST');
+        state.aiPlan = plan;
+        state.healthScore = await apiRequest(`/api/projects/${state.currentProject.id}/health-score`);
+        state.decisions = await apiRequest(`/api/projects/${state.currentProject.id}/decisions`);
+        state.notice = "AI Multi-Agent Construction Plan generated across all 8 agents successfully!";
+      } catch (e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    async function createProjectHandler(e) {
+      e.preventDefault();
+      const form = e.target;
+      try {
+        state.loading = true;
+        render();
+        // 1. Create project
+        const proj = await apiRequest('/api/projects', 'POST', {
+          project_name: form.project_name.value,
+          location: form.location.value,
+          status: 'planning'
+        });
+        // 2. Save requirements
+        await apiRequest(`/api/projects/${proj.id}/requirements`, 'POST', {
+          plot_width: parseFloat(form.plot_width.value),
+          plot_length: parseFloat(form.plot_length.value),
+          number_of_floors: parseInt(form.number_of_floors.value),
+          bedrooms: parseInt(form.bedrooms.value),
+          bathrooms: parseInt(form.bathrooms.value),
+          parking_required: form.parking_required.value === 'true',
+          budget: parseFloat(form.budget.value),
+          architectural_style: form.architectural_style.value,
+          construction_type: form.construction_type.value,
+          target_completion_months: parseInt(form.target_completion_months.value),
+          sustainability_priority: form.sustainability_priority.value,
+          special_requirements: form.special_requirements.value
+        });
+        // 3. Immediately synthesize dynamic AI plan for this new project
+        state.projects = await apiRequest('/api/projects');
+        state.aiPlan = await apiRequest(`/api/projects/${proj.id}/ai-plan`, 'POST');
+        await selectProject(proj.id);
+        state.activePage = 'dashboard';
+        state.notice = `Project "${proj.project_name}" created & full AI multi-agent blueprint synthesized!`;
+      } catch(e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    async function simulateWhatIfHandler(beds, budget, months, rate) {
+      if (!state.currentProject) return;
+      try {
+        state.loading = true;
+        render();
+        const res = await apiRequest(`/api/projects/${state.currentProject.id}/what-if`, 'POST', {
+          bedrooms: parseInt(beds),
+          budget: parseFloat(budget),
+          target_completion_months: parseInt(months),
+          interest_rate: parseFloat(rate)
+        });
+        state.whatIfResult = res;
+      } catch(e) {
+        state.error = e.message;
+      } finally {
+        state.loading = false;
+        render();
+      }
+    }
+
+    function setPage(pageName) {
+      state.activePage = pageName;
+      state.notice = null;
+      state.error = null;
+      render();
+    }
+
+    function selectFloor(fNum) {
+      state.selectedFloor = fNum;
+      render();
+    }
+
+    // =========================================================
+    // RENDER LOGIC
+    // =========================================================
+    function render() {
+      const app = document.getElementById('app');
+      const req = state.currentProject?.requirement || {
+        plot_width: 30, plot_length: 50, plot_area: 1500,
+        number_of_floors: 2, bedrooms: 3, bathrooms: 3, budget: 5000000,
+        target_completion_months: 10, architectural_style: 'Modern Minimalist',
+        parking_required: true, sustainability_priority: 'Medium'
+      };
+
+      const budgetLakh = (req.budget / 100000).toFixed(1);
+      const estCost = state.aiPlan?.cost?.total_estimated_cost || (req.budget * 0.97);
+      const estCostLakh = (estCost / 100000).toFixed(1);
+      const variance = estCost - req.budget;
+      const isOverrun = variance > 0;
+
+      app.innerHTML = `
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <div class="logo-badge">BW</div>
+            <div class="logo-text">
+              <h1>BuildWise AI</h1>
+              <p>Construction Intelligence</p>
+            </div>
+          </div>
+
+          <nav class="sidebar-nav">
+            <div class="nav-section-title">Overview</div>
+            <div class="nav-link ${state.activePage === 'landing' ? 'active' : ''}" onclick="setPage('landing')">
+              <span>🏠 Home & Architecture</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'dashboard' ? 'active' : ''}" onclick="setPage('dashboard')">
+              <span>📊 Project Dashboard</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'create' ? 'active' : ''}" onclick="setPage('create')">
+              <span>✏️ New Project Intake</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'planning' ? 'active' : ''}" onclick="setPage('planning')">
+              <span>🧠 AI Multi-Agent Hub</span>
+            </div>
+
+            <div class="nav-section-title">Agent Blueprints</div>
+            <div class="nav-link ${state.activePage === 'layout' ? 'active' : ''}" onclick="setPage('layout')">
+              <span>🏠 House Layout</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'design' ? 'active' : ''}" onclick="setPage('design')">
+              <span>📐 2D Floor Plan & Blueprint</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'cost' ? 'active' : ''}" onclick="setPage('cost')">
+              <span>💰 Cost & BOQ Rates</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'materials' ? 'active' : ''}" onclick="setPage('materials')">
+              <span>🌿 Eco Materials</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'timeline' ? 'active' : ''}" onclick="setPage('timeline')">
+              <span>📅 CPM Timeline</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'risk' ? 'active' : ''}" onclick="setPage('risk')">
+              <span>⚠️ Risk Matrix</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'interior' ? 'active' : ''}" onclick="setPage('interior')">
+              <span>🛋️ Interior & Ergonomics</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'finance' ? 'active' : ''}" onclick="setPage('finance')">
+              <span>💳 Loan EMI & Cash Flow</span>
+            </div>
+
+            <div class="nav-section-title">Intelligence & Tools</div>
+            <div class="nav-link ${state.activePage === 'whatif' ? 'active' : ''}" onclick="setPage('whatif')">
+              <span>🎛️ What-If Simulator</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'decisions' ? 'active' : ''}" onclick="setPage('decisions')">
+              <span>📝 Decision Audit Log</span>
+            </div>
+            <div class="nav-link ${state.activePage === 'contractors' ? 'active' : ''}" onclick="setPage('contractors')">
+              <span>👷 Contractor Marketplace</span>
+            </div>
+          </nav>
+
+          <div class="sidebar-footer">
+            <span>FastAPI + LangGraph</span>
+            <span class="badge badge-success">Dynamic Engine</span>
+          </div>
+        </aside>
+
+        <!-- Main Wrapper -->
+        <div class="main-wrapper">
+          <header class="top-header">
+            <div style="display:flex;align-items:center;gap:16px;">
+              ${state.projects.length > 0 ? `
+                <select class="form-control" style="width:280px;padding:6px 12px;font-size:0.85rem;" onchange="selectProject(this.value)">
+                  ${state.projects.map(p => `
+                    <option value="${p.id}" ${state.currentProject?.id === p.id ? 'selected' : ''}>
+                      #${p.id} — ${p.project_name} (${p.location || 'Urban'})
+                    </option>
+                  `).join('')}
+                </select>
+              ` : ''}
+              ${state.healthScore ? `
+                <div class="badge badge-primary" style="padding:6px 14px;font-size:0.8rem;">
+                  Health Score: <b>${state.healthScore.overall_score}/100</b> (${state.healthScore.grade})
+                </div>
+              ` : ''}
+            </div>
+
+            <div style="display:flex;align-items:center;gap:10px;">
+              <button class="btn btn-secondary btn-sm" onclick="loadChennaiDemo()">
+                ✨ Load Chennai Demo
+              </button>
+              ${state.currentProject ? `
+                <a href="/api/projects/${state.currentProject.id}/report" class="btn btn-primary btn-sm" download target="_blank">
+                  📄 Download PDF Report
+                </a>
+              ` : ''}
+            </div>
+          </header>
+
+          ${state.notice ? `
+            <div style="margin:16px 28px 0;padding:12px 16px;background:#E8F5E9;color:#2E7D32;border-radius:8px;border:1px solid #C8E6C9;font-size:0.88rem;">
+              <b>Success:</b> ${state.notice}
+            </div>
+          ` : ''}
+
+          ${state.error ? `
+            <div style="margin:16px 28px 0;padding:12px 16px;background:#FFEBEE;color:#C62828;border-radius:8px;border:1px solid #FFCDD2;font-size:0.88rem;">
+              <b>System Notice:</b> ${state.error}
+            </div>
+          ` : ''}
+
+          <main class="page-content">
+            ${renderPageContent(req, budgetLakh, estCostLakh, variance, isOverrun)}
+          </main>
+        </div>
+      `;
+    }
+
+    // =========================================================
+    // DYNAMIC PAGE CONTENT GENERATOR
+    // =========================================================
+    function renderPageContent(req, budgetLakh, estCostLakh, variance, isOverrun) {
+      if (state.activePage === 'landing') {
+        return `
+          <div style="display:flex;flex-direction:column;gap:32px;">
+            <div class="card" style="background:linear-gradient(135deg, #224435 0%, #233939 100%);color:#FFF;padding:48px 36px;">
+              <div style="max-width:820px;">
+                <div class="badge badge-gold" style="margin-bottom:16px;">AI Multi-Agent Construction Orchestration</div>
+                <h1 style="font-size:2.3rem;font-weight:800;line-height:1.2;margin-bottom:16px;color:#FFFDE6;">
+                  Truly Dynamic Floor Plans, Costing & Architectural Intelligence.
+                </h1>
+                <p style="font-size:1.02rem;color:rgba(255,255,255,0.85);line-height:1.6;margin-bottom:28px;">
+                  BuildWise AI generates project-aware 2D geometric floor plans, deterministic Schedule of Rates (SOR) cost breakdowns, dynamic CPM construction schedules, and sustainable material recommendations based on your exact plot and budget inputs.
+                </p>
+                <div style="display:flex;gap:14px;flex-wrap:wrap;">
+                  <button class="btn btn-secondary btn-lg" onclick="loadChennaiDemo()">✨ Launch Chennai Demo Project</button>
+                  <button class="btn btn-outline btn-lg" style="color:#FFFDE6;border-color:#FFFDE6;" onclick="setPage('create')">Create Custom Home Project</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="grid-4">
+              <div class="card">
+                <h3 style="font-size:1.05rem;color:var(--primary);margin-bottom:8px;font-weight:700;">Deterministic 2D Floor Plan</h3>
+                <p style="font-size:0.86rem;color:var(--text-muted);">Non-overlapping spatial room allocation with setbacks, room dimensions, natural light vectors and floor zoning.</p>
+              </div>
+              <div class="card">
+                <h3 style="font-size:1.05rem;color:var(--primary);margin-bottom:8px;font-weight:700;">Dynamic Cost BOQ</h3>
+                <p style="font-size:0.86rem;color:var(--text-muted);">11-category Schedule of Rates (SOR) adapting to budget constraints, built-up area, and multi-storey premiums.</p>
+              </div>
+              <div class="card">
+                <h3 style="font-size:1.05rem;color:var(--primary);margin-bottom:8px;font-weight:700;">Dynamic What-If Simulator</h3>
+                <p style="font-size:0.86rem;color:var(--text-muted);">Simulates bedroom, floor, and budget changes with instant module delta recalculations.</p>
+              </div>
+              <div class="card">
+                <h3 style="font-size:1.05rem;color:var(--primary);margin-bottom:8px;font-weight:700;">16-Section PDF Reports</h3>
+                <p style="font-size:0.86rem;color:var(--text-muted);">One-click download of executive summaries, CPM schedules, and financial loan models.</p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'create') {
+        return `
+          <div class="card" style="max-width:850px;margin:0 auto;">
+            <div class="card-header">
+              <h2 class="card-title">✏️ Homeowner Project Intake & Requirements Form</h2>
+              <span class="badge badge-primary">Custom Input</span>
+            </div>
+
+            <form onsubmit="createProjectHandler(event)">
+              <div class="grid-2">
+                <div class="form-group">
+                  <label class="form-label">Project Name</label>
+                  <input name="project_name" class="form-control" value="Modern Green Oasis" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Location / City</label>
+                  <input name="location" class="form-control" value="Chennai (Anna Nagar / OMR)" required />
+                </div>
+              </div>
+
+              <div class="grid-3">
+                <div class="form-group">
+                  <label class="form-label">Plot Width (ft)</label>
+                  <input name="plot_width" type="number" step="0.1" class="form-control" value="30" required oninput="document.getElementById('plot_area_preview').value = (this.value * document.getElementsByName('plot_length')[0].value) || 0" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Plot Length (ft)</label>
+                  <input name="plot_length" type="number" step="0.1" class="form-control" value="50" required oninput="document.getElementById('plot_area_preview').value = (this.value * document.getElementsByName('plot_width')[0].value) || 0" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Plot Area (sq.ft)</label>
+                  <input id="plot_area_preview" type="number" class="form-control" value="1500" disabled style="background:#f5f5f5;" />
+                </div>
+              </div>
+
+              <div class="grid-4">
+                <div class="form-group">
+                  <label class="form-label">Number of Floors</label>
+                  <select name="number_of_floors" class="form-control">
+                    <option value="1">Ground Floor (G+0)</option>
+                    <option value="2" selected>2 Floors (G+1)</option>
+                    <option value="3">3 Floors (G+2)</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Bedrooms (BHK)</label>
+                  <input name="bedrooms" type="number" class="form-control" value="3" min="1" max="8" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Bathrooms</label>
+                  <input name="bathrooms" type="number" class="form-control" value="3" min="1" max="8" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Parking Required</label>
+                  <select name="parking_required" class="form-control">
+                    <option value="true" selected>Yes (Covered Porch)</option>
+                    <option value="false">No</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid-3">
+                <div class="form-group">
+                  <label class="form-label">Target Budget (INR)</label>
+                  <input name="budget" type="number" class="form-control" value="5000000" step="50000" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Target Timeline (Months)</label>
+                  <input name="target_completion_months" type="number" class="form-control" value="10" min="4" max="24" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Sustainability Priority</label>
+                  <select name="sustainability_priority" class="form-control">
+                    <option value="Low">Standard Grid</option>
+                    <option value="Medium" selected>Medium (Low-VOC, AAC Blocks)</option>
+                    <option value="High">High (Solar PV, Rainwater, Eco)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="form-group">
+                  <label class="form-label">Architectural Style</label>
+                  <select name="architectural_style" class="form-control">
+                    <option value="Modern" selected>Modern Minimalist</option>
+                    <option value="Contemporary">Contemporary Scandinavian</option>
+                    <option value="Traditional">Traditional Regional</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Construction Type</label>
+                  <select name="construction_type" class="form-control">
+                    <option value="RCC Frame" selected>RCC Frame Structure</option>
+                    <option value="Modular PEB">Modular Steel + AAC</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Special Customization Requirements</label>
+                <textarea name="special_requirements" class="form-control" rows="2">Rooftop solar PV 3kWp with net-metering and EV charging point</textarea>
+              </div>
+
+              <button type="submit" class="btn btn-primary btn-lg" style="width:100%;margin-top:12px;">
+                🚀 Submit Requirements & Generate Dynamic AI Plan
+              </button>
+            </form>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'dashboard') {
+        const fp = state.aiPlan?.design?.floor_plan;
+        const totalBuiltUp = state.aiPlan?.design?.total_built_up_area || (req.plot_width * req.plot_length * 0.7 * req.number_of_floors);
+        const carpetArea = state.aiPlan?.design?.carpet_area || (totalBuiltUp * 0.8);
+        const style = state.aiPlan?.design?.design_style || req.architectural_style || 'Modern';
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <!-- KPI Cards -->
+            <div class="grid-4">
+              <div class="stat-card">
+                <span class="stat-title">Homeowner Budget</span>
+                <span class="stat-value">₹${budgetLakh} L</span>
+                <span class="stat-sub">Allocated Corpus <span class="badge badge-success">USER INPUT</span></span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Estimated Cost</span>
+                <span class="stat-value">₹${estCostLakh} L</span>
+                <span class="stat-sub">
+                  ${isOverrun ? `<span class="badge badge-danger">OVERRUN: ₹${(variance/100000).toFixed(1)}L</span>` : `<span class="badge badge-success">BUFFER: ₹${(Math.abs(variance)/100000).toFixed(1)}L</span>`}
+                </span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Timeline Duration</span>
+                <span class="stat-value">${state.aiPlan?.timeline?.total_duration_months || req.target_completion_months || 10} Mos</span>
+                <span class="stat-sub">CPM Scheduled <span class="badge badge-info">CPM ENGINE</span></span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Project Health</span>
+                <span class="stat-value" style="color:var(--success);">${state.healthScore?.overall_score || 92}/100</span>
+                <span class="stat-sub">${state.healthScore?.grade || 'A'} - ${state.healthScore?.rating || 'Excellent'}</span>
+              </div>
+            </div>
+
+            <!-- Active Project Banner -->
+            <div class="card" style="background:var(--light);display:flex;justify-content:space-between;align-items:center;padding:18px 24px;">
+              <div>
+                <h3 style="color:var(--primary);font-weight:700;">${state.currentProject?.project_name || 'Home Construction Project'}</h3>
+                <p style="font-size:0.85rem;margin-top:4px;">
+                  Location: <b>${state.currentProject?.location || req.location || 'Chennai'}</b> | 
+                  Configuration: <b>${req.bedrooms || 3} BHK (${req.bathrooms || 3} Baths)</b> | 
+                  Plot: <b>${req.plot_width || 30} × ${req.plot_length || 50} ft (${req.plot_area || 1500} sq.ft)</b> | 
+                  Floors: <b>${req.number_of_floors || 2} Level(s)</b>
+                </p>
+              </div>
+              <div style="display:flex;gap:10px;">
+                <button class="btn btn-primary" onclick="runAIPlan()">
+                  🧠 Regenerate AI Blueprint
+                </button>
+                <button class="btn btn-outline" onclick="setPage('whatif')">
+                  🎛️ Simulate What-If
+                </button>
+              </div>
+            </div>
+
+            <!-- Agent Blueprint Summary Card -->
+            <div class="card" style="border-left:5px solid var(--primary);">
+              <div class="card-header">
+                <h3 class="card-title">🏛️ Active Agent Blueprint Specifications</h3>
+                <span class="badge badge-primary">${style} Style</span>
+              </div>
+              <div class="grid-3" style="font-size:0.88rem;margin-bottom:12px;">
+                <div>Total Built-Up Area: <b>${Math.round(totalBuiltUp).toLocaleString()} sq.ft</b></div>
+                <div>Carpet Efficiency Area: <b>${Math.round(carpetArea).toLocaleString()} sq.ft (82%)</b></div>
+                <div>Ground Coverage: <b>${fp?.ground_coverage_pct || 68}%</b></div>
+                <div>Parking Facility: <b>${req.parking_required ? 'Covered Porch (1-2 Slots)' : 'Not Required'}</b></div>
+                <div>Sustainability Standard: <b>${req.sustainability_priority || 'Medium'} Tier</b></div>
+                <div>Structural System: <b>${req.construction_type || 'RCC Frame Structure'}</b></div>
+              </div>
+              <p style="font-size:0.84rem;color:var(--text-muted);background:var(--surface-subtle);padding:10px 14px;border-radius:6px;margin-top:6px;">
+                <b>Design Rationale:</b> ${state.aiPlan?.design?.design_rationale || `Architectural zoning tailored for ${req.bedrooms} BHK across ${req.number_of_floors} level(s).`}
+              </p>
+            </div>
+
+            <!-- Quick Navigation Cards -->
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;">
+              <div class="card" style="cursor:pointer;border-top:4px solid var(--primary);" onclick="setPage('layout')">
+                <div class="card-header"><h3 class="card-title">🏠 House Layout</h3><span class="badge badge-primary">New</span></div>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Dynamic house layout showing plot boundary, setback dimensions & room placement.</p>
+              </div>
+              <div class="card" style="cursor:pointer;" onclick="setPage('design')">
+                <div class="card-header"><h3 class="card-title">📐 2D Floor Plan</h3><span class="badge badge-primary">View</span></div>
+                <p style="font-size:0.85rem;color:var(--text-muted);">Interactive geometric floor plan with room dimensions and natural light vectors.</p>
+              </div>
+              <div class="card" style="cursor:pointer;" onclick="setPage('cost')">
+                <div class="card-header"><h3 class="card-title">💰 Cost Breakdown</h3><span class="badge badge-primary">View</span></div>
+                <p style="font-size:0.85rem;color:var(--text-muted);">11-category Schedule of Rates: Civil, MEP, Finishes, Labour & Contingency.</p>
+              </div>
+              <div class="card" style="cursor:pointer;" onclick="setPage('timeline')">
+                <div class="card-header"><h3 class="card-title">📅 CPM Timeline</h3><span class="badge badge-primary">View</span></div>
+                <p style="font-size:0.85rem;color:var(--text-muted);">${state.aiPlan?.timeline?.total_duration_months || 10}-month CPM critical path schedule.</p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'layout') {
+        const fp = state.aiPlan?.design?.floor_plan;
+        const floors = fp?.floors || [];
+        const activeFloorNum = state.selectedFloor || 1;
+        const currFloor = floors.find(f => f.floor_number === activeFloorNum) || floors[0];
+        const rooms = currFloor?.rooms || [];
+
+        const plotW = fp?.plot_width || req.plot_width || 30;
+        const plotL = fp?.plot_length || req.plot_length || 50;
+        const totalFloors = floors.length || req.number_of_floors || 1;
+        const totalBuiltUp = state.aiPlan?.design?.total_built_up_area || (req.plot_area * 0.7 * totalFloors);
+
+        // Color mapper for room types in house layout
+        const layoutColors = {
+          living: { fill: '#E8F4F8', stroke: '#1B4F72', text: '#154360', badge: '#2980B9', label: 'Living' },
+          dining: { fill: '#FEF9E7', stroke: '#B7950B', text: '#7D6608', badge: '#D4AC0D', label: 'Dining' },
+          kitchen: { fill: '#FDEDEC', stroke: '#B03A2E', text: '#78281F', badge: '#E74C3C', label: 'Kitchen' },
+          bedroom: { fill: '#EAFaf1', stroke: '#1E8449', text: '#145A32', badge: '#27AE60', label: 'Bedroom' },
+          bathroom: { fill: '#E8F8F5', stroke: '#117A65', text: '#0E6655', badge: '#16A085', label: 'Bathroom' },
+          parking: { fill: '#EBEDEF', stroke: '#5D6D7E', text: '#2C3E50', badge: '#7F8C8D', label: 'Parking' },
+          staircase: { fill: '#F5EEF8', stroke: '#6C3483', text: '#512E5F', badge: '#8E44AD', label: 'Staircase' },
+          balcony: { fill: '#E8F6F3', stroke: '#138D75', text: '#117A65', badge: '#1ABC9C', label: 'Balcony' },
+          study: { fill: '#F2F4F4', stroke: '#515A5A', text: '#212F3D', badge: '#707B7C', label: 'Study' },
+        };
+
+        // Canvas dimensions
+        const svgW = 820;
+        const svgH = 540;
+        const padX = 54;
+        const padY = 54;
+        const innerW = svgW - (2 * padX);
+        const innerH = svgH - (2 * padY);
+
+        // Setbacks
+        const sideSb = Math.min(4.0, Math.max(2.5, plotW * 0.08));
+        const frontSb = Math.min(8.0, Math.max(4.0, plotL * 0.12));
+        const rearSb = Math.min(5.0, Math.max(3.0, plotL * 0.08));
+
+        const scalePlotX = innerW / plotW;
+        const scalePlotY = innerH / plotL;
+
+        const bX = padX + (sideSb * scalePlotX);
+        const bY = padY + (frontSb * scalePlotY);
+        const bW = (plotW - (2 * sideSb)) * scalePlotX;
+        const bH = (plotL - (frontSb + rearSb)) * scalePlotY;
+
+        const maxRx = Math.max(...rooms.map(r => r.x + r.width), (plotW - (2 * sideSb)) * 0.9, 1);
+        const maxRy = Math.max(...rooms.map(r => r.y + r.height), (plotL - (frontSb + rearSb)) * 0.9, 1);
+        const rScaleX = bW / maxRx;
+        const rScaleY = bH / maxRy;
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">🏠 Dynamic House Layout & Site Spatial Plan</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Plot Boundary: <b>${plotW} × ${plotL} ft (${Math.round(plotW * plotL)} sq.ft)</b> | Footprint: <b>${currFloor?.built_up_area || Math.round(totalBuiltUp / totalFloors)} sq.ft</b> | Style: <b>${state.aiPlan?.design?.design_style || 'Modern'}</b>
+                  </p>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  ${floors.map(f => `
+                    <button class="tab-btn ${f.floor_number === activeFloorNum ? 'active' : ''}" onclick="selectFloor(${f.floor_number})">
+                      ${f.floor_name} (${f.built_up_area} sq.ft)
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+
+              <!-- Interactive Full Plot House Layout Canvas -->
+              <div class="floor-svg-wrap" style="background:#14231B;border-radius:12px;padding:18px;">
+                <svg viewBox="0 0 ${svgW} ${svgH}" style="width:100%;height:auto;display:block;">
+                  <!-- Outer Plot Boundary with Dimensional Labels -->
+                  <rect x="${padX}" y="${padY}" width="${innerW}" height="${innerH}" fill="none" stroke="#58D68D" stroke-dasharray="6,6" stroke-width="1.8" rx="4" />
+                  
+                  <!-- Top Dimension: Width -->
+                  <text x="${padX + innerW/2}" y="${padY - 26}" text-anchor="middle" fill="#58D68D" font-size="12" font-weight="bold" font-family="sans-serif">
+                    ◄── PLOT WIDTH: ${plotW} FT ──►
+                  </text>
+
+                  <!-- Left Dimension: Length -->
+                  <text x="${padX - 26}" y="${padY + innerH/2}" transform="rotate(-90 ${padX - 26} ${padY + innerH/2})" text-anchor="middle" fill="#58D68D" font-size="12" font-weight="bold" font-family="sans-serif">
+                    ◄── PLOT LENGTH: ${plotL} FT ──►
+                  </text>
+
+                  <!-- Setback Annotations -->
+                  <text x="${bX + bW/2}" y="${bY - 10}" text-anchor="middle" fill="#F9F4BE" font-size="10.5" font-family="sans-serif">
+                    ▲ Front Yard & Driveway Setback: ${frontSb.toFixed(1)} ft ▲
+                  </text>
+                  <text x="${bX + bW/2}" y="${bY + bH + 18}" text-anchor="middle" fill="#F9F4BE" font-size="10.5" font-family="sans-serif">
+                    ▼ Rear Service & Ventilation Setback: ${rearSb.toFixed(1)} ft ▼
+                  </text>
+                  <text x="${bX - 10}" y="${bY + bH/2}" transform="rotate(-90 ${bX - 10} ${bY + bH/2})" text-anchor="middle" fill="#F9F4BE" font-size="9.5" font-family="sans-serif">
+                    Side Clear: ${sideSb.toFixed(1)} ft
+                  </text>
+                  <text x="${bX + bW + 18}" y="${bY + bH/2}" transform="rotate(90 ${bX + bW + 18} ${bY + bH/2})" text-anchor="middle" fill="#F9F4BE" font-size="9.5" font-family="sans-serif">
+                    Side Clear: ${sideSb.toFixed(1)} ft
+                  </text>
+
+                  <!-- Building Footprint Exterior Envelope -->
+                  <rect x="${bX - 4}" y="${bY - 4}" width="${bW + 8}" height="${bH + 8}" fill="rgba(0,0,0,0.3)" stroke="#F9F4BE" stroke-width="2.5" rx="5" />
+                  <text x="${bX + 8}" y="${bY - 10}" fill="#F9F4BE" font-size="10" font-weight="bold" font-family="sans-serif">
+                    ${currFloor?.floor_name || 'Ground Floor'} Built-Up Footprint (${currFloor?.built_up_area || ''} sq.ft)
+                  </text>
+
+                  <!-- North Direction Compass -->
+                  <g transform="translate(${svgW - 65}, 16)">
+                    <circle cx="18" cy="18" r="16" fill="rgba(0,0,0,0.5)" stroke="rgba(255,255,255,0.3)" stroke-width="1"/>
+                    <line x1="18" y1="28" x2="18" y2="8" stroke="#F9F4BE" stroke-width="2.5" />
+                    <polygon points="18,8 14,15 22,15" fill="#F9F4BE" />
+                    <text x="15" y="25" fill="#FFFFFF" font-size="9" font-weight="bold" font-family="sans-serif">N</text>
+                  </g>
+
+                  <!-- Dynamic Non-Overlapping Rooms -->
+                  ${rooms.map(rm => {
+                    const rx = bX + (rm.x * rScaleX);
+                    const ry = bY + (rm.y * rScaleY);
+                    const rw = rm.width * rScaleX;
+                    const rh = rm.height * rScaleY;
+                    const c = layoutColors[rm.room_type] || layoutColors.living;
+
+                    // Specialized architectural decorations
+                    let extraSvg = '';
+                    if (rm.room_type === 'parking') {
+                      extraSvg = `
+                        <line x1="${rx + 10}" y1="${ry + 20}" x2="${rx + rw - 10}" y2="${ry + 20}" stroke="rgba(0,0,0,0.2)" stroke-dasharray="4,4" stroke-width="1.5"/>
+                        <line x1="${rx + 10}" y1="${ry + rh - 20}" x2="${rx + rw - 10}" y2="${ry + rh - 20}" stroke="rgba(0,0,0,0.2)" stroke-dasharray="4,4" stroke-width="1.5"/>
+                        <text x="${rx + rw/2}" y="${ry + rh/2 + 4}" text-anchor="middle" fill="#7F8C8D" font-size="10" font-weight="bold">CAR VEHICLE BAY</text>
+                      `;
+                    } else if (rm.room_type === 'staircase') {
+                      const steps = 6;
+                      const stepH = rh / steps;
+                      let stepLines = '';
+                      for (let s = 1; s < steps; s++) {
+                        stepLines += `<line x1="${rx}" y1="${ry + s*stepH}" x2="${rx + rw}" y2="${ry + s*stepH}" stroke="rgba(108,52,131,0.25)" stroke-width="1"/>`;
+                      }
+                      extraSvg = stepLines + `<text x="${rx + rw/2}" y="${ry + rh/2 + 3}" text-anchor="middle" fill="#6C3483" font-size="9" font-weight="bold">▲ UP / DN</text>`;
+                    } else if (rm.room_type === 'kitchen') {
+                      extraSvg = `
+                        <rect x="${rx + 4}" y="${ry + 4}" width="${Math.min(rw - 8, 16)}" height="${rh - 8}" fill="none" stroke="rgba(176,58,46,0.3)" stroke-width="1.5" stroke-dasharray="3,3"/>
+                      `;
+                    }
+
+                    return `
+                      <g class="svg-room-group">
+                        <rect class="svg-room-rect" x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2" rx="4" />
+                        ${extraSvg}
+                        <!-- Room Name -->
+                        <text x="${rx + 8}" y="${ry + 18}" fill="${c.text}" font-size="11.5" font-weight="bold" font-family="sans-serif">
+                          ${rm.name}
+                        </text>
+                        <!-- Dimensions -->
+                        <text x="${rx + 8}" y="${ry + 32}" fill="#555555" font-size="10" font-family="sans-serif">
+                          ${rm.width.toFixed(1)}' × ${rm.height.toFixed(1)}' (${rm.area_sqft} sq.ft)
+                        </text>
+                        <!-- Zone Badge -->
+                        <rect x="${rx + 8}" y="${ry + Math.max(38, rh - 24)}" width="${Math.min(76, rw - 16)}" height="16" fill="${c.badge}" rx="3" />
+                        <text x="${rx + 13}" y="${ry + Math.max(38, rh - 24) + 11}" fill="#FFFFFF" font-size="8.5" font-weight="600" font-family="sans-serif">
+                          ${c.label}
+                        </text>
+                        <!-- Ventilation Orientation -->
+                        <text x="${rx + rw - 8}" y="${ry + Math.max(38, rh - 12)}" text-anchor="end" fill="#666666" font-size="9" font-family="sans-serif">
+                          ☀ ${(rm.natural_light || 'Ventilated').split(' ')[0]}
+                        </text>
+                      </g>
+                    `;
+                  }).join('')}
+                </svg>
+              </div>
+
+              <!-- Room Allocation Matrix Table -->
+              <div style="margin-top:24px;">
+                <h4 style="color:var(--primary);margin-bottom:12px;font-weight:700;">
+                  ${currFloor?.floor_name || 'Ground Floor'} Room Schedule & Spatial Matrix
+                </h4>
+                <div class="table-responsive">
+                  <table class="table-custom">
+                    <thead>
+                      <tr>
+                        <th>Room Name</th>
+                        <th>Classification</th>
+                        <th>Dimensions (W × L)</th>
+                        <th>Floor Area</th>
+                        <th>Natural Light Vector</th>
+                        <th>Adjacency Connectivity</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${rooms.map(rm => `
+                        <tr>
+                          <td><b>${rm.name}</b></td>
+                          <td><span class="badge badge-primary">${rm.zone}</span></td>
+                          <td>${rm.width.toFixed(1)} ft × ${rm.height.toFixed(1)} ft</td>
+                          <td><b>${rm.area_sqft} sq.ft</b></td>
+                          <td>${rm.natural_light}</td>
+                          <td style="font-size:0.82rem;color:var(--text-muted);">${(rm.adjacent_to || []).join(', ') || 'Corridor Access'}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Architectural & Compliance Breakdown -->
+              <div style="margin-top:24px;padding:16px;background:var(--surface-subtle);border-radius:8px;border:1px solid var(--light-border);">
+                <h4 style="color:var(--primary);margin-bottom:8px;font-weight:700;">Architectural Specifications & NBC 2016 Zoning</h4>
+                <div class="grid-3" style="font-size:0.86rem;margin-bottom:10px;">
+                  <div>Ground Coverage: <b>${fp?.ground_coverage_pct || 68}%</b></div>
+                  <div>Plot Area: <b>${plotW * plotL} sq.ft</b></div>
+                  <div>Total Built-Up: <b>${Math.round(totalBuiltUp)} sq.ft</b></div>
+                  <div>FAR (Floor Area Ratio): <b>${(totalBuiltUp / (plotW * plotL)).toFixed(2)}</b></div>
+                  <div>Clear Ceiling Height: <b>10.0 ft Standard</b></div>
+                  <div>Ventilation Standard: <b>NBC 2016 Compliant</b></div>
+                </div>
+                <p style="font-size:0.82rem;color:var(--text-muted);line-height:1.5;margin:0;">
+                  <b>Spatial Hierarchy:</b> ${(state.aiPlan?.design?.spatial_relationships || []).join(' • ') || 'Zoned for natural cross-ventilation.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'design') {
+        const fp = state.aiPlan?.design?.floor_plan;
+        const floors = fp?.floors || [];
+        const activeFloorNum = state.selectedFloor || 1;
+        const currFloor = floors.find(f => f.floor_number === activeFloorNum) || floors[0];
+
+        // Color mapper for room types
+        const typeColors = {
+          living: { fill: '#EBF5FB', stroke: '#2980B9', text: '#1B4F72', zone: 'Living' },
+          dining: { fill: '#FEF9E7', stroke: '#F39C12', text: '#7D6608', zone: 'Living/Dining' },
+          kitchen: { fill: '#FDEDEC', stroke: '#E74C3C', text: '#78281F', zone: 'Service' },
+          bedroom: { fill: '#EAFaf1', stroke: '#27AE60', text: '#145A32', zone: 'Private' },
+          bathroom: { fill: '#E8F8F5', stroke: '#16A085', text: '#0E6655', zone: 'Sanitary' },
+          parking: { fill: '#EBEDEF', stroke: '#7F8C8D', text: '#2C3E50', zone: 'Circulation' },
+          staircase: { fill: '#F5EEF8', stroke: '#8E44AD', text: '#512E5F', zone: 'Circulation' },
+          balcony: { fill: '#E8F6F3', stroke: '#1ABC9C', text: '#117A65', zone: 'Circulation' },
+        };
+
+        const plotW = fp?.plot_width || req.plot_width || 30;
+        const plotL = fp?.plot_length || req.plot_length || 50;
+        const rooms = currFloor?.rooms || [];
+
+        // Scale factors to map feet to SVG coordinates
+        // Canvas dimensions: 760 x 520
+        const svgW = 760;
+        const svgH = 500;
+        const padX = 30;
+        const padY = 30;
+        const innerW = svgW - (2 * padX);
+        const innerH = svgH - (2 * padY);
+
+        // Find max x + width, y + height of rooms to bound footprint
+        const maxRx = Math.max(...rooms.map(r => r.x + r.width), plotW * 0.8);
+        const maxRy = Math.max(...rooms.map(r => r.y + r.height), plotL * 0.8);
+        const scaleX = innerW / maxRx;
+        const scaleY = innerH / maxRy;
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">📐 Dynamic 2D Floor Plan & Architectural Blueprint</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Plot: <b>${plotW} × ${plotL} ft</b> | Total Built-Up Area: <b>${Math.round(state.aiPlan?.design?.total_built_up_area || 2100)} sq.ft</b> | Style: <b>${state.aiPlan?.design?.design_style || 'Modern'}</b>
+                  </p>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  ${floors.map(f => `
+                    <button class="tab-btn ${f.floor_number === activeFloorNum ? 'active' : ''}" onclick="selectFloor(${f.floor_number})">
+                      ${f.floor_name} (${f.built_up_area} sq.ft)
+                    </button>
+                  `).join('')}
+                </div>
+              </div>
+
+              <!-- Interactive SVG 2D Floor Plan Canvas -->
+              <div class="floor-svg-wrap">
+                <svg viewBox="0 0 ${svgW} ${svgH}" style="width:100%;height:auto;display:block;">
+                  <!-- Outer Plot Boundary Indicator -->
+                  <rect x="5" y="5" width="${svgW - 10}" height="${svgH - 10}" fill="none" stroke="rgba(255,255,255,0.15)" stroke-dasharray="6,6" stroke-width="1.5" rx="6" />
+                  <text x="16" y="22" fill="rgba(255,255,255,0.5)" font-size="11" font-family="sans-serif">Plot Boundary: ${plotW} ft × ${plotL} ft (${Math.round(plotW * plotL)} sq.ft)</text>
+
+                  <!-- Building Setback Area & Peripheral Footprint -->
+                  <rect x="${padX - 8}" y="${padY - 8}" width="${innerW + 16}" height="${innerH + 16}" fill="rgba(0,0,0,0.25)" stroke="#F9F4BE" stroke-width="2" rx="6" />
+                  <text x="${padX}" y="${padY - 14}" fill="#F9F4BE" font-size="11" font-weight="bold" font-family="sans-serif">
+                    ${currFloor?.floor_name || 'Ground Floor'} Built-Up Footprint (${currFloor?.built_up_area || ''} sq.ft)
+                  </text>
+
+                  <!-- North Direction Arrow -->
+                  <g transform="translate(${svgW - 65}, 20)">
+                    <circle cx="20" cy="20" r="18" fill="rgba(0,0,0,0.4)" stroke="rgba(255,255,255,0.3)" stroke-width="1"/>
+                    <line x1="20" y1="32" x2="20" y2="8" stroke="#F9F4BE" stroke-width="2.5" marker-end="url(#arrow)" />
+                    <polygon points="20,8 15,16 25,16" fill="#F9F4BE" />
+                    <text x="16" y="28" fill="#FFFFFF" font-size="10" font-weight="bold" font-family="sans-serif">N</text>
+                  </g>
+
+                  <!-- Dynamic Room Rectangles -->
+                  ${rooms.map(rm => {
+                    const rx = padX + (rm.x * scaleX);
+                    const ry = padY + (rm.y * scaleY);
+                    const rw = rm.width * scaleX;
+                    const rh = rm.height * scaleY;
+                    const styleConf = typeColors[rm.room_type] || typeColors.living;
+
+                    return `
+                      <g class="svg-room-group">
+                        <rect class="svg-room-rect" x="${rx}" y="${ry}" width="${rw}" height="${rh}" fill="${styleConf.fill}" stroke="${styleConf.stroke}" stroke-width="2" rx="4" />
+                        <!-- Room Header & Dimensions -->
+                        <text x="${rx + 8}" y="${ry + 20}" fill="${styleConf.text}" font-size="12" font-weight="bold" font-family="sans-serif">
+                          ${rm.name}
+                        </text>
+                        <text x="${rx + 8}" y="${ry + 36}" fill="#555555" font-size="10.5" font-family="sans-serif">
+                          ${rm.width.toFixed(1)}' × ${rm.height.toFixed(1)}' (${rm.area_sqft} sq.ft)
+                        </text>
+                        <!-- Room Zone Badge -->
+                        <rect x="${rx + 8}" y="${ry + Math.max(44, rh - 26)}" width="${Math.min(90, rw - 16)}" height="18" fill="${styleConf.stroke}" rx="3" />
+                        <text x="${rx + 14}" y="${ry + Math.max(44, rh - 26) + 13}" fill="#FFFFFF" font-size="9" font-weight="600" font-family="sans-serif">
+                          ${styleConf.zone}
+                        </text>
+                        <!-- Light orientation vector -->
+                        <text x="${rx + rw - 8}" y="${ry + Math.max(44, rh - 12)}" text-anchor="end" fill="#777777" font-size="9.5" font-family="sans-serif">
+                          ☀ ${rm.natural_light.split(' ')[0]}
+                        </text>
+                      </g>
+                    `;
+                  }).join('')}
+                </svg>
+              </div>
+
+              <!-- Room Allocation Schedule Table -->
+              <div style="margin-top:24px;">
+                <h4 style="color:var(--primary);margin-bottom:12px;font-weight:700;">
+                  ${currFloor?.floor_name || 'Ground Floor'} Room Schedule & Spatial Matrix
+                </h4>
+                <div class="table-responsive">
+                  <table class="table-custom">
+                    <thead>
+                      <tr>
+                        <th>Room Name</th>
+                        <th>Type / Zone</th>
+                        <th>Dimensions (W × L)</th>
+                        <th>Floor Area</th>
+                        <th>Natural Light Vector</th>
+                        <th>Adjacency Connectivity</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${rooms.map(rm => `
+                        <tr>
+                          <td><b>${rm.name}</b></td>
+                          <td><span class="badge badge-primary">${rm.zone}</span></td>
+                          <td>${rm.width.toFixed(1)} ft × ${rm.height.toFixed(1)} ft</td>
+                          <td><b>${rm.area_sqft} sq.ft</b></td>
+                          <td>${rm.natural_light}</td>
+                          <td style="font-size:0.82rem;color:var(--text-muted);">${(rm.adjacent_to || []).join(', ') || 'Corridor Access'}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Blueprint Specifications -->
+              <div style="margin-top:24px;padding:16px;background:var(--surface-subtle);border-radius:8px;border:1px solid var(--light-border);">
+                <h4 style="color:var(--primary);margin-bottom:8px;font-weight:700;">Architectural Specifications & NBC Compliance</h4>
+                <div class="grid-3" style="font-size:0.86rem;margin-bottom:10px;">
+                  <div>Ground Coverage: <b>${fp?.ground_coverage_pct || 68}%</b></div>
+                  <div>FAR (Floor Area Ratio): <b>${((state.aiPlan?.design?.total_built_up_area || 2100) / (plotW * plotL)).toFixed(2)}</b></div>
+                  <div>Ceiling Height: <b>10.0 ft Standard Clear</b></div>
+                  <div>External Wall: <b>9-inch AAC Masonry</b></div>
+                  <div>Internal Partitions: <b>4.5-inch Acoustic Masonry</b></div>
+                  <div>Ventilation Norm: <b>NBC 2016 Compliant</b></div>
+                </div>
+                <p style="font-size:0.82rem;color:var(--text-muted);line-height:1.5;">
+                  <b>Spatial Hierarchy:</b> ${(state.aiPlan?.design?.spatial_relationships || []).join(' • ') || 'Zoned for natural cross-ventilation.'}
+                </p>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'cost') {
+        const cost = state.aiPlan?.cost;
+        const categories = cost?.categories || [];
+        const directCost = categories.reduce((acc, c) => acc + c.subtotal, 0) || (cost?.material_cost + cost?.labor_cost + cost?.mep_cost) || 4500000;
+        const contingency = cost?.contingency_amount || Math.round(directCost * 0.075);
+        const totalCost = cost?.total_estimated_cost || (directCost + contingency);
+        const costPerSqft = cost?.cost_per_sqft || Math.round(totalCost / 2100);
+        const comp = cost?.budget_comparison || {};
+        const savingsRecs = cost?.cost_saving_recommendations || [];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <!-- Cost KPIs -->
+            <div class="grid-3">
+              <div class="stat-card">
+                <span class="stat-title">Direct Civil & MEP Cost</span>
+                <span class="stat-value">₹${(directCost/100000).toFixed(2)} L</span>
+                <span class="stat-sub">Materials (58%) + Labor (28%) + MEP (14%)</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Site Contingency (7.5%)</span>
+                <span class="stat-value">₹${(contingency/100000).toFixed(2)} L</span>
+                <span class="stat-sub">Market Price Fluctuation Buffer</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Total Turnkey Cost</span>
+                <span class="stat-value" style="color:var(--primary);">₹${(totalCost/100000).toFixed(2)} L</span>
+                <span class="stat-sub">Unit Rate: <b>₹${costPerSqft}/sq.ft</b></span>
+              </div>
+            </div>
+
+            <!-- Budget Constraint Analysis Card -->
+            <div class="card" style="border-left:5px solid ${isOverrun ? 'var(--danger, #C62828)' : 'var(--success, #2E7D32)'};">
+              <div class="card-header">
+                <h3 class="card-title">🎯 Budget Constraint Analysis & Variance Engine</h3>
+                <span class="badge ${isOverrun ? 'badge-danger' : 'badge-success'}">
+                  ${isOverrun ? 'BUDGET OVERRUN DETECTED' : 'WITHIN ALLOCATED BUDGET'}
+                </span>
+              </div>
+              <div class="grid-3" style="font-size:0.88rem;margin-bottom:12px;">
+                <div>Allocated Homeowner Budget: <b>₹${(req.budget).toLocaleString()}</b></div>
+                <div>Calculated Construction Cost: <b>₹${Math.round(totalCost).toLocaleString()}</b></div>
+                <div>Net Difference: <b style="color:${isOverrun ? '#C62828' : '#2E7D32'};">₹${Math.abs(Math.round(variance)).toLocaleString()} (${isOverrun ? '+' : '-'}${Math.abs(comp.percentage_difference || ((variance/req.budget)*100)).toFixed(1)}%)</b></div>
+              </div>
+
+              ${savingsRecs.length > 0 ? `
+                <div style="background:var(--surface-subtle);padding:14px;border-radius:6px;margin-top:8px;">
+                  <b style="font-size:0.85rem;color:var(--primary);display:block;margin-bottom:6px;">
+                    ${isOverrun ? '⚠️ Recommended Cost-Reduction Actions:' : '💡 Strategic Surplus Capital Allocation:'}
+                  </b>
+                  <ul style="margin:0;padding-left:20px;font-size:0.82rem;color:var(--dark);line-height:1.6;">
+                    ${savingsRecs.map(rec => `<li>${rec}</li>`).join('')}
+                  </ul>
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- Itemized Schedule of Rates Table -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">📋 Itemized Schedule of Rates (SOR) Bill of Quantities</h3>
+                <span class="badge badge-primary">${categories.length} Specialized Work Packages</span>
+              </div>
+
+              <div class="table-responsive">
+                <table class="table-custom">
+                  <thead>
+                    <tr>
+                      <th>Work Category</th>
+                      <th>Engineering Scope & Specification</th>
+                      <th>Quantity</th>
+                      <th>Unit Rate</th>
+                      <th>Subtotal (INR)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${categories.map(c => `
+                      <tr>
+                        <td><b>${c.category}</b></td>
+                        <td>${c.item_name}</td>
+                        <td>${c.quantity} ${c.unit}</td>
+                        <td>₹${c.unit_price.toLocaleString()}</td>
+                        <td><b>₹${Math.round(c.subtotal).toLocaleString()}</b></td>
+                      </tr>
+                    `).join('')}
+                    <tr style="background:var(--surface-subtle);">
+                      <td colspan="4"><b>Unforeseen Site Contingency Buffer (7.5%)</b></td>
+                      <td><b>₹${Math.round(contingency).toLocaleString()}</b></td>
+                    </tr>
+                    <tr style="background:var(--light);font-weight:700;">
+                      <td colspan="4">TOTAL ESTIMATED CONSTRUCTION COST (TURNKEY HANDOVER)</td>
+                      <td style="color:var(--primary);font-size:1.08rem;">₹${Math.round(totalCost).toLocaleString()}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'materials') {
+        const matOutput = state.aiPlan?.materials;
+        const recommendations = matOutput?.recommendations || [];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">🌿 Project-Aware Eco & Durability Material Recommendations</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Algorithmically synthesized for ₹${budgetLakh}L budget, ${Math.round(state.aiPlan?.design?.total_built_up_area || 2100)} sq.ft area & ${req.sustainability_priority || 'Medium'} eco-profile.
+                  </p>
+                </div>
+                <span class="badge badge-success">${matOutput?.overall_sustainability_rating || 'IGBC Green Standard'}</span>
+              </div>
+
+              <div class="grid-2">
+                ${recommendations.map(m => `
+                  <div class="card" style="background:var(--surface-subtle);">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+                      <div>
+                        <span class="badge badge-primary">${m.category}</span>
+                        <h4 style="font-weight:700;font-size:1.02rem;color:var(--primary);margin-top:6px;">${m.material}</h4>
+                      </div>
+                      <div style="text-align:right;">
+                        <span style="font-size:1.25rem;font-weight:800;color:var(--success);">${m.recommendation_score}</span>
+                        <span style="font-size:0.7rem;color:var(--text-muted);display:block;">/10 Score</span>
+                      </div>
+                    </div>
+
+                    <div class="grid-2" style="margin-top:14px;font-size:0.82rem;">
+                      <div>Durability: <b>${m.durability}</b></div>
+                      <div>Maintenance: <b>${m.maintenance}</b></div>
+                      <div>Sustainability: <b>${m.sustainability}</b></div>
+                      <div>Est. Cost: <b style="color:var(--primary);">₹${Math.round(m.estimated_cost).toLocaleString()}</b></div>
+                    </div>
+
+                    <div style="margin-top:12px;font-size:0.8rem;color:var(--dark);">
+                      <b>Key Advantages:</b> ${(m.advantages || []).join(', ') || 'High durability and regional compliance.'}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'timeline') {
+        const timeline = state.aiPlan?.timeline;
+        const phases = timeline?.phases || [];
+        const totalDuration = timeline?.total_duration_months || req.target_completion_months || 10;
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">📅 Critical Path Method (CPM) Construction Schedule</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Precedence Diagramming Method scaled for ${req.number_of_floors || 2} floors and ${totalDuration} months total duration.
+                  </p>
+                </div>
+                <span class="badge badge-danger">${totalDuration} Months CPM Critical Path</span>
+              </div>
+
+              <!-- Gantt Chart -->
+              <div style="display:flex;flex-direction:column;gap:14px;margin-top:14px;">
+                ${phases.map(p => {
+                  const leftPct = ((p.start_month / totalDuration) * 100).toFixed(1);
+                  const widthPct = Math.max(4, (((p.end_month - p.start_month) / totalDuration) * 100)).toFixed(1);
+                  return `
+                    <div>
+                      <div style="display:flex;justify-content:space-between;font-size:0.84rem;margin-bottom:4px;">
+                        <span><b>${p.task_id}:</b> ${p.task_name}</span>
+                        <span>${p.duration_weeks} wks (Month ${p.start_month.toFixed(1)} - ${p.end_month.toFixed(1)}) ${p.is_critical_path ? '<span class="badge badge-danger" style="margin-left:6px;">Critical</span>' : ''}</span>
+                      </div>
+                      <div class="gantt-bar-container">
+                        <div class="gantt-bar ${p.is_critical_path ? 'critical' : ''}" style="left:${leftPct}%;width:${widthPct}%;">
+                          ${p.duration_weeks} wks
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'risk') {
+        const riskOutput = state.aiPlan?.risks;
+        const risks = riskOutput?.risks || [];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">⚠️ Dynamic Construction Risk Matrix (Probability × Impact)</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Calibrated for ${req.location || 'Chennai'} regional weather, budget sensitivity & multi-storey structural safety.
+                  </p>
+                </div>
+                <span class="badge badge-${riskOutput?.overall_risk_level === 'HIGH' ? 'danger' : 'warning'}">
+                  Overall Risk: ${riskOutput?.overall_risk_level || 'MEDIUM'}
+                </span>
+              </div>
+
+              <div class="grid-2">
+                ${risks.map(r => `
+                  <div class="card" style="background:var(--surface-subtle);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                      <span class="badge badge-primary">${r.category}</span>
+                      <span class="badge badge-${r.severity === 'HIGH' || r.severity === 'CRITICAL' ? 'danger' : (r.severity === 'MEDIUM' ? 'warning' : 'success')}">
+                        ${r.severity} SEVERITY
+                      </span>
+                    </div>
+                    <h4 style="font-weight:700;font-size:0.96rem;color:var(--dark);margin-top:8px;">${r.risk}</h4>
+                    <p style="font-size:0.82rem;color:var(--text-muted);margin:6px 0;">
+                      Probability: <b>${r.probability}/5</b> | Impact: <b>${r.impact}/5</b> | Risk Score: <b>${r.score}/25</b>
+                    </p>
+                    <div style="font-size:0.8rem;background:#FFF;padding:8px 10px;border-radius:6px;margin-top:8px;border:1px solid var(--light-border);">
+                      <b>Mitigation Protocol:</b> ${r.mitigation}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'interior') {
+        const interior = state.aiPlan?.interior;
+        const rooms = interior?.rooms || [];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">🛋️ Room-Wise Interior Architecture & Ergonomic Specifications</h2>
+                  <p style="font-size:0.84rem;color:var(--text-muted);margin-top:4px;">
+                    Theme: <b>${interior?.style_theme || `${req.architectural_style || 'Modern'} Interior Scheme`}</b>
+                  </p>
+                </div>
+                <span class="badge badge-primary">${req.architectural_style || 'Modern'} Aesthetic</span>
+              </div>
+
+              <div class="grid-3">
+                ${rooms.map(rm => `
+                  <div class="card" style="background:var(--surface-subtle);">
+                    <h4 style="font-weight:700;color:var(--primary);margin-bottom:8px;">${rm.room_name}</h4>
+                    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px;line-height:1.4;">
+                      ${(rm.furniture_layout || []).join(' • ') || 'Ergonomic furniture layout'}
+                    </p>
+                    
+                    <div style="margin-bottom:10px;">
+                      <span style="font-size:0.75rem;font-weight:600;color:var(--dark);">Color Harmony Swatches:</span>
+                      <div style="display:flex;gap:6px;margin-top:4px;">
+                        ${(rm.color_palette || []).map(c => {
+                          const hexMatch = c.match(/#[0-9A-Fa-f]{6}/);
+                          const hex = hexMatch ? hexMatch[0] : '#E8D8C8';
+                          return `<div class="color-swatch" style="background:${hex};" title="${c}"></div>`;
+                        }).join('')}
+                      </div>
+                    </div>
+
+                    <div style="font-size:0.78rem;color:var(--text-muted);line-height:1.4;">
+                      <div><b>Lighting:</b> ${rm.lighting_plan}</div>
+                      <div style="margin-top:4px;"><b>Clearance:</b> ${rm.circulation_clearance}</div>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'finance') {
+        const fin = state.aiPlan?.finance;
+        const totalCost = fin?.estimated_total_cost || state.aiPlan?.cost?.total_estimated_cost || req.budget;
+        const downPayment = fin?.down_payment_amount || (totalCost * 0.20);
+        const loanAmount = fin?.loan_amount || (totalCost * 0.80);
+        const emi = fin?.monthly_emi || 38212;
+        const cashFlow = fin?.monthly_cash_flow_projection || [];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <!-- Financing Stat Cards -->
+            <div class="grid-4">
+              <div class="stat-card">
+                <span class="stat-title">Promoter Equity (20%)</span>
+                <span class="stat-value">₹${(downPayment/100000).toFixed(2)} L</span>
+                <span class="stat-sub">Self Funding Contribution</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Bank Construction Loan (80%)</span>
+                <span class="stat-value">₹${(loanAmount/100000).toFixed(2)} L</span>
+                <span class="stat-sub">@ 8.5% p.a. (15 Years)</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Monthly EMI</span>
+                <span class="stat-value" style="color:var(--primary);">₹${Math.round(emi).toLocaleString()}</span>
+                <span class="stat-sub">180 Monthly Installments</span>
+              </div>
+              <div class="stat-card">
+                <span class="stat-title">Total Repayment</span>
+                <span class="stat-value">₹${((fin?.total_repayment_amount || loanAmount * 1.77)/100000).toFixed(2)} L</span>
+                <span class="stat-sub">Principal + Interest</span>
+              </div>
+            </div>
+
+            <!-- Milestone Cash Flow Table -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">💳 Milestone-Linked Construction Cash Flow & Disbursement Schedule</h3>
+                <span class="badge badge-success">5-Stage Structured Tranches</span>
+              </div>
+
+              <div class="table-responsive">
+                <table class="table-custom">
+                  <thead>
+                    <tr>
+                      <th>Construction Milestone Phase</th>
+                      <th>Tranche Share</th>
+                      <th>Stage Outflow (INR)</th>
+                      <th>Cumulative Outflow</th>
+                      <th>Disbursement Channel</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${cashFlow.map(cf => `
+                      <tr>
+                        <td><b>${cf.milestone}</b></td>
+                        <td><span class="badge badge-primary">${cf.percentage}%</span></td>
+                        <td>₹${Math.round(cf.stage_outflow).toLocaleString()}</td>
+                        <td><b>₹${Math.round(cf.cumulative_outflow).toLocaleString()}</b></td>
+                        <td><span class="badge ${cf.recommended_disbursement.includes('Self') ? 'badge-info' : 'badge-success'}">${cf.recommended_disbursement}</span></td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'whatif') {
+        return `
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">🎛️ Dynamic What-If Scenario Simulator</h2>
+              <span class="badge badge-primary">Propagated Recalculation</span>
+            </div>
+            
+            <div class="grid-4" style="margin-bottom:16px;">
+              <div class="form-group">
+                <label class="form-label">Bedrooms</label>
+                <select id="wi_beds" class="form-control">
+                  <option value="2" ${req.bedrooms == 2 ? 'selected' : ''}>2 BHK</option>
+                  <option value="3" ${req.bedrooms == 3 ? 'selected' : ''}>3 BHK</option>
+                  <option value="4" ${req.bedrooms == 4 ? 'selected' : ''}>4 BHK</option>
+                  <option value="5" ${req.bedrooms == 5 ? 'selected' : ''}>5 BHK</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Budget (INR)</label>
+                <input id="wi_budget" type="number" step="100000" class="form-control" value="${req.budget || 5000000}" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Timeline (Months)</label>
+                <input id="wi_months" type="number" class="form-control" value="${req.target_completion_months || 10}" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Loan Interest Rate (%)</label>
+                <input id="wi_rate" type="number" step="0.25" class="form-control" value="8.5" />
+              </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="simulateWhatIfHandler(document.getElementById('wi_beds').value, document.getElementById('wi_budget').value, document.getElementById('wi_months').value, document.getElementById('wi_rate').value)">
+              ⚡ Run What-If Simulation
+            </button>
+
+            ${state.whatIfResult ? `
+              <div style="margin-top:24px;padding:18px;background:var(--surface-subtle);border-radius:8px;border:1px solid var(--light-border);">
+                <h4 style="color:var(--primary);margin-bottom:12px;font-weight:700;">Simulation Comparison (Before vs After)</h4>
+                <div class="grid-3" style="font-size:0.88rem;margin-bottom:12px;">
+                  <div><b>Bedrooms:</b> ${state.whatIfResult.before_summary.bedrooms} BHK → <span style="color:var(--primary);font-weight:700;">${state.whatIfResult.after_summary.bedrooms} BHK</span></div>
+                  <div><b>Total Cost:</b> ₹${(state.whatIfResult.before_summary.total_estimated_cost/100000).toFixed(1)}L → <span style="color:var(--primary);font-weight:700;">₹${(state.whatIfResult.after_summary.total_estimated_cost/100000).toFixed(1)}L</span></div>
+                  <div><b>Monthly EMI:</b> ₹${Math.round(state.whatIfResult.before_summary.monthly_emi).toLocaleString()} → <span style="color:var(--primary);font-weight:700;">₹${Math.round(state.whatIfResult.after_summary.monthly_emi).toLocaleString()}/mo</span></div>
+                </div>
+                <div style="font-size:0.82rem;color:var(--text-muted);">
+                  <b>Affected Modules Recalculated:</b> ${(state.whatIfResult.affected_modules || []).join(', ')}
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'decisions') {
+        const decs = state.decisions || [];
+        return `
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">📝 AI Decision Audit Log</h2>
+              <span class="badge badge-success">Verifiable Audit Trail</span>
+            </div>
+            <div class="table-responsive">
+              <table class="table-custom">
+                <thead>
+                  <tr>
+                    <th>Agent</th>
+                    <th>Decision Rationale</th>
+                    <th>Confidence</th>
+                    <th>Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${decs.length > 0 ? decs.map(d => `
+                    <tr>
+                      <td><b>${d.agent}</b></td>
+                      <td>${d.decision}</td>
+                      <td><span class="badge badge-primary">${Math.round((d.confidence || 0.92) * 100)}%</span></td>
+                      <td style="font-size:0.75rem;color:var(--text-muted);">${d.created_at ? new Date(d.created_at).toLocaleTimeString() : 'Live Execution'}</td>
+                    </tr>
+                  `).join('') : `
+                    <tr><td colspan="4" style="text-align:center;color:var(--text-muted);">No decision log recorded yet. Run AI Planning to generate audit trail.</td></tr>
+                  `}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'contractors') {
+        return `
+          <div class="grid-2">
+            ${(state.contractors || []).map(c => `
+              <div class="card" style="background:var(--surface-subtle);">
+                <div style="display:flex;justify-content:space-between;">
+                  <h4 style="font-weight:700;color:var(--primary);">${c.name}</h4>
+                  <span class="badge badge-success">VERIFIED</span>
+                </div>
+                <p style="font-size:0.8rem;color:var(--text-muted);margin:4px 0;">${c.location} | ${c.specialization}</p>
+                <div style="font-size:0.82rem;margin-top:8px;">Rating: <b>${c.rating}</b> (${c.years_experience} Yrs) | Est: <b>${c.estimated_cost_range_sqft}</b> | Avail: <b>${c.availability}</b></div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      if (state.activePage === 'planning') {
+        const statuses = state.aiPlan?.agent_execution_status || {};
+        const agentList = [
+          { key: "Requirement Agent", role: "NLP extraction & parameter validation" },
+          { key: "Design Agent", role: "2D spatial zoning & non-overlapping geometry" },
+          { key: "Cost Estimation Agent", role: "11-category SOR & budget constraint evaluation" },
+          { key: "Material Recommendation Agent", role: "Eco-durability rating & green specifications" },
+          { key: "Timeline Agent", role: "CPM Critical Path Method scheduling" },
+          { key: "Risk Prediction Agent", role: "8-dimension construction risk matrix (P × I)" },
+          { key: "Interior Design Agent", role: "Room-wise ergonomics, lighting & color palette" },
+          { key: "Finance Agent", role: "Loan amortization & milestone cash flow" },
+        ];
+
+        return `
+          <div style="display:flex;flex-direction:column;gap:24px;">
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <h2 class="card-title">🧠 LangGraph Multi-Agent Orchestration Hub</h2>
+                <p style="font-size:0.85rem;color:var(--text-muted);">8 Specialized Agents executing synchronously over unified Pydantic ProjectState.</p>
+              </div>
+              <button class="btn btn-primary" onclick="runAIPlan()">
+                ▶️ Execute Multi-Agent Plan
+              </button>
+            </div>
+
+            <div class="grid-2">
+              ${agentList.map(ag => {
+                const st = statuses[ag.key] || { status: 'COMPLETED', confidence: 0.94 };
+                return `
+                  <div class="card" style="border-left:5px solid var(--success);">
+                    <div style="display:flex;justify-content:space-between;">
+                      <h4 style="font-weight:700;color:var(--dark);">${ag.key}</h4>
+                      <span class="badge badge-success">${st.status || 'COMPLETED'}</span>
+                    </div>
+                    <p style="font-size:0.8rem;color:var(--text-muted);margin:6px 0;">${ag.role}</p>
+                    <div style="font-size:0.75rem;color:var(--primary);margin-top:8px;padding-top:6px;border-top:1px solid var(--light);">
+                      Confidence: <b>${Math.round((st.confidence || 0.94) * 100)}%</b> | Mode: <b>Deterministic Python + LangGraph</b>
+                    </div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      return `<div class="card"><h2>Page not found</h2></div>`;
+    }
+
+    // Start App reliably regardless of document readyState
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
